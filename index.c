@@ -1,4 +1,4 @@
-// index.c — Staging area implementation
+	// index.c — Staging area implementation
 //
 // Text format of .pes/index (one entry per line, sorted by path):
 //
@@ -23,7 +23,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <dirent.h>
-
+#include <time.h>
+#include "pes.h"
 // ─── PROVIDED ────────────────────────────────────────────────────────────────
 
 // Find an index entry by path (linear scan).
@@ -135,10 +136,23 @@ int index_status(const Index *index) {
 //
 // Returns 0 on success, -1 on error.
 int index_load(Index *index) {
-    // TODO: Implement index loading
-    // (See Lab Appendix for logical steps)
-    (void)index;
-    return -1;
+    index->count = 0;
+
+    FILE *f = fopen(".pes/index", "r");
+    if (!f) return 0; // empty index is OK
+
+    while (fscanf(f, "%o %64s %lu %u %511[^\n]\n",
+                  &index->entries[index->count].mode,
+                  index->entries[index->count].hash.hash,
+                  &index->entries[index->count].mtime_sec,
+                  &index->entries[index->count].size,
+                  index->entries[index->count].path) == 5) {
+
+        index->count++;
+    }
+
+    fclose(f);
+    return 0;
 }
 
 // Save the index to .pes/index atomically.
@@ -151,25 +165,69 @@ int index_load(Index *index) {
 //   - rename                           : atomically moving the temp file over the old index
 //
 // Returns 0 on success, -1 on error.
-int index_save(const Index *index) {
-    // TODO: Implement atomic index saving
-    // (See Lab Appendix for logical steps)
-    (void)index;
-    return -1;
-}
+
 
 // Stage a file for the next commit.
 //
 // HINTS - Useful functions and syscalls:
 //   - fopen, fread, fclose             : reading the target file's contents
+int index_save(const Index *index) {
+    FILE *f = fopen(".pes/index", "w");
+    if (!f) return -1;
+
+    for (int i = 0; i < index->count; i++) {
+        const IndexEntry *e = &index->entries[i];
+
+        fprintf(f, "%o ", e->mode);
+
+        for (int j = 0; j < 32; j++) {
+            fprintf(f, "%02x", e->hash.hash[j]);
+        }
+
+        fprintf(f, " %lu %u %s\n",
+                e->mtime_sec,
+                e->size,
+                e->path);
+    }
+
+    fclose(f);
+    return 0;
+}
 //   - object_write                     : saving the contents as OBJ_BLOB
 //   - stat / lstat                     : getting file metadata (size, mtime, mode)
 //   - index_find                       : checking if the file is already staged
 //
 // Returns 0 on success, -1 on error.
-int index_add(Index *index, const char *path) {
+
     // TODO: Implement file staging
     // (See Lab Appendix for logical steps)
-    (void)index; (void)path;
+int index_add(Index *index, const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+
+    fseek(f, 0, SEEK_END);
+    size_t size = ftell(f);
+    rewind(f);
+
+    void *data = malloc(size);
+    if (fread(data, 1, size, f) != size) {
+    free(data);
     return -1;
+}
+    fclose(f);
+
+    ObjectID id;
+    object_write(OBJ_BLOB, data, size, &id);
+
+    free(data);
+
+    IndexEntry *e = &index->entries[index->count++];
+
+    e->mode = 100644;
+    e->hash = id;
+    e->size = size;
+    e->mtime_sec = time(NULL);
+    strcpy(e->path, path);
+    index_save(index); 
+    return 0;
 }
