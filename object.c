@@ -16,7 +16,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <openssl/evp.h>
-
+#include <openssl/sha.h>
 // ─── PROVIDED ────────────────────────────────────────────────────────────────
 
 void hash_to_hex(const ObjectID *id, char *hex_out) {
@@ -51,7 +51,7 @@ void compute_hash(const void *data, size_t len, ObjectID *id_out) {
 void object_path(const ObjectID *id, char *path_out, size_t path_size) {
     char hex[HASH_HEX_SIZE + 1];
     hash_to_hex(id, hex);
-    snprintf(path_out, path_size, "%s/%.2s/%s", OBJECTS_DIR, hex, hex + 2);
+   	 snprintf(path_out, path_size, "%s/%.2s/%s", OBJECTS_DIR, hex, hex + 2);
 }
 
 int object_exists(const ObjectID *id) {
@@ -94,11 +94,61 @@ int object_exists(const ObjectID *id) {
 //
 // Returns 0 on success, -1 on error.
 int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out) {
-    // TODO: Implement
-    (void)type; (void)data; (void)len; (void)id_out;
-    return -1;
-}
+    // create header
+    char header[64];
+    int header_len = sprintf(header, "%d %zu", type, len);
 
+    size_t total_size = header_len + 1 + len;
+    unsigned char *buffer = malloc(total_size);
+
+    memcpy(buffer, header, header_len);
+    buffer[header_len] = '\0';
+    memcpy(buffer + header_len + 1, data, len);
+
+    // compute SHA256
+    unsigned char hash[32];
+    SHA256(buffer, total_size, hash);
+
+    // convert hash to hex
+    char hash_hex[65];
+    for (int i = 0; i < 32; i++) {
+        sprintf(hash_hex + i * 2, "%02x", hash[i]);
+    }
+    hash_hex[64] = '\0';
+
+    // create directories
+    mkdir(".pes", 0755);
+    mkdir(".pes/objects", 0755);
+
+    char dir[256];
+    sprintf(dir, ".pes/objects/%.2s", hash_hex);
+    mkdir(dir, 0755);
+
+    // file path
+    char path[512];
+    sprintf(path, "%s/%s", dir, hash_hex + 2);
+
+    // temp file
+    char temp_path[512];
+   	snprintf(temp_path, sizeof(temp_path), "%s.tmp", path);
+
+    FILE *f = fopen(temp_path, "wb");
+    if (!f) {
+        free(buffer);
+        return -1;
+    }
+
+    fwrite(buffer, 1, total_size, f);
+    fclose(f);
+
+    rename(temp_path, path);
+
+    // copy hash to id_out
+    memcpy(id_out->hash, hash, 32);
+
+    free(buffer);
+    return 0;
+}
 // Read an object from the store.
 //
 // Steps:
@@ -122,7 +172,63 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
 // The caller is responsible for calling free(*data_out).
 // Returns 0 on success, -1 on error (file not found, corrupt, etc.).
 int object_read(const ObjectID *id, ObjectType *type_out, void **data_out, size_t *len_out) {
-    // TODO: Implement
-    (void)id; (void)type_out; (void)data_out; (void)len_out;
+    // convert hash to hex
+    char hash_hex[65];
+    for (int i = 0; i < 32; i++) {
+        sprintf(hash_hex + i * 2, "%02x", id->hash[i]);
+    }
+    hash_hex[64] = '\0';
+
+    // build path
+    char path[512];
+    sprintf(path, ".pes/objects/%.2s/%s", hash_hex, hash_hex + 2);
+
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+
+    // get size
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    rewind(f);
+
+    unsigned char *buffer = malloc(size);
+   if (fread(buffer, 1, size, f) != size) {
+    free(buffer);
     return -1;
+}
+    fclose(f);
+
+    // verify hash
+    unsigned char new_hash[32];
+    SHA256(buffer, size, new_hash);
+
+    if (memcmp(new_hash, id->hash, 32) != 0) {
+        free(buffer);
+        return -1;
+    }
+
+    // parse header
+    char *null_pos = memchr(buffer, '\0', size);
+    if (!null_pos) {
+        free(buffer);
+        return -1;
+    }
+
+    // extract type and size
+    int type;
+    size_t data_len;
+    sscanf((char *)buffer, "%d %zu", &type, &data_len);
+
+    *type_out = type;
+    *len_out = data_len;
+
+    // copy data
+    unsigned char *data_start = (unsigned char *)(null_pos + 1);
+    void *data = malloc(data_len);
+    memcpy(data, data_start, data_len);
+
+    *data_out = data;
+
+    free(buffer);
+    return 0;
 }
