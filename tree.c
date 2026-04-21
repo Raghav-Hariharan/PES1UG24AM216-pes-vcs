@@ -1,4 +1,4 @@
-// tree.c — Tree object serialization and construction
+	// tree.c — Tree object serialization and construction
 //
 // PROVIDED functions: get_file_mode, tree_parse, tree_serialize
 // TODO functions:     tree_from_index
@@ -15,6 +15,7 @@
 #include <string.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include "index.h"
 
 // ─── Mode Constants ─────────────────────────────────────────────────────────
 
@@ -129,9 +130,28 @@ int tree_serialize(const Tree *tree, void **data_out, size_t *len_out) {
 //   - object_write    : save that binary buffer to the store as OBJ_TREE
 //
 // Returns 0 on success, -1 on error.
-int tree_from_index(ObjectID *id_out) {
+
     // TODO: Implement recursive tree building
     // (See Lab Appendix for logical steps)
-    (void)id_out;
-    return -1;
+int tree_from_index(ObjectID *tree_id_out) {
+    Index index;
+
+    if (index_load(&index) != 0) {
+        return -1;
+    }
+
+    char buffer[4096];
+    size_t offset = 0;
+
+    for (size_t i = 0; i < index.count; i++) {
+        IndexEntry *entry = &index.entries[i];
+
+        offset += sprintf(buffer + offset, "%o %s", entry->mode, entry->path);
+        buffer[offset++] = '\0';
+
+       memcpy(buffer + offset, entry->hash.hash, 32);
+        offset += 32;
+    }
+
+    return object_write(OBJ_TREE, buffer, offset, tree_id_out);
 }
